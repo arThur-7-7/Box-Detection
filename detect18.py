@@ -29,7 +29,7 @@ def pixel_to_mm(pixel_distance, depth, fx):
     return (pixel_distance * depth) / fx  # Convert pixels to mm
 
 # JSON file for real-time data logging
-json_filename = "detections.json"
+json_filename = "detection.json"
 
 def save_to_json(data):
     with open(json_filename, "w") as json_file:
@@ -55,14 +55,13 @@ try:
         results = model.predict(frame, show=False)
 
         object_list = []  # Store detected objects for priority sorting
+        label_list = []  # Store detected labels
 
         # Process detections
         for result in results:
             for box, cls in zip(result.boxes.xyxy, result.boxes.cls):
                 x1, y1, x2, y2 = map(int, box)
                 center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
-                z_distance = depth_frame.get_distance(center_x, center_y) * 1000  # Convert to mm
-
                 label = model.names[int(cls)].lower()  # Get class label from model
 
                 # Ensure coordinates are within valid range
@@ -71,12 +70,15 @@ try:
                 x2 = max(0, min(x2, 639))
                 y2 = max(0, min(y2, 479))
 
-                width_mm = pixel_to_mm(x2 - x1, z_distance, intrinsics.fx)
-                height_mm = pixel_to_mm(y2 - y1, z_distance, intrinsics.fy)
-
-                # Store detected object details
-                if label in ["package", "frame"]:  
-                    object_list.append((label, center_x, center_y, z_distance, width_mm, height_mm, x1, y1, x2, y2))
+                # Store detected object details for packages and frames
+                if label in ["package", "frame"]:
+                    z_distance = depth_frame.get_distance(center_x, center_y) * 1000  # Convert to mm
+                    width_mm = pixel_to_mm(x2 - x1, z_distance, intrinsics.fx)
+                    length_mm = pixel_to_mm(y2 - y1, z_distance, intrinsics.fy)
+                    object_list.append((label, center_x, center_y, z_distance, width_mm, length_mm, x1, y1, x2, y2))
+                else:
+                    print("Label Detected")
+                    label_list.append((label, x1, y1, x2, y2))
 
         # Sort detected objects based on depth (closer objects get higher priority)
         object_list.sort(key=lambda x: x[3])  
@@ -88,12 +90,13 @@ try:
         json_data = []
 
         # Assign priorities and display
-        for priority, (label, center_x, center_y, z_distance, width_mm, height_mm, x1, y1, x2, y2) in enumerate(object_list, start=1):
-            print(f"{priority}: {label.upper()} → X={center_x} mm, Y={center_y} mm, Z={z_distance:.1f} mm, Size: {width_mm:.1f} mm x {height_mm:.1f} mm")
+        for priority, (label, center_x, center_y, z_distance, width_mm, length_mm, x1, y1, x2, y2) in enumerate(object_list, start=1):
+            print(f"{priority}: {label.upper()} → X={center_x} mm, Y={center_y} mm, Z={z_distance:.1f} mm, Size: {width_mm:.1f} mm x {length_mm:.1f} mm")
 
             # Draw bounding box
             color = (0, 255, 0) if label == "frame" else (255, 0, 0)  # Green for "frame", Blue for "package"
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.drawMarker(frame, (center_x, center_y), (0, 0, 255), cv2.MARKER_CROSS, 10, 2)  # Mark center with 'X'
 
             # Add priority label
             text = f"{label.upper()} - {priority}"
@@ -107,8 +110,14 @@ try:
                 "center_y": center_y,
                 "depth": round(z_distance, 1),
                 "width_mm": round(width_mm, 1),
-                "height_mm": round(height_mm, 1)
+                "length_mm": round(length_mm, 1)
             })
+
+        # Store detected labels
+        for label, x1, y1, x2, y2 in label_list:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            cv2.putText(frame, label.upper(), (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+            json_data.append({"label": label.upper(), "bounding_box": [x1, y1, x2, y2]})
 
         # Save data to JSON file
         save_to_json(json_data)
